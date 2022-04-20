@@ -43,16 +43,17 @@ describe('Interaction Hover Tests', () => {
         getActualText: () => '...',
         getFieldValue: () => '',
       } as any);
-    hoverEvent = new HoverEvent(s2 as unknown as SpreadSheet);
     s2.options = {
       interaction: {
         hoverHighlight: true,
+        hoverFocus: true,
       },
       tooltip: {
         operation: {},
       },
     } as S2Options;
     s2.isTableMode = jest.fn(() => true);
+    hoverEvent = new HoverEvent(s2 as unknown as SpreadSheet);
   });
 
   afterEach(() => {
@@ -83,7 +84,7 @@ describe('Interaction Hover Tests', () => {
     expect(s2.showTooltipWithInfo).toHaveBeenCalled();
   });
 
-  test('should trigger row cell hover', async () => {
+  test('should trigger row cell hover', () => {
     s2.emit(S2Event.ROW_CELL_HOVER, { target: {} } as GEvent);
     expect(s2.interaction.getState()).toEqual({
       cells: [mockCellMeta],
@@ -93,7 +94,7 @@ describe('Interaction Hover Tests', () => {
     expect(s2.showTooltipWithInfo).toHaveBeenCalled();
   });
 
-  test('should trigger col cell hover', async () => {
+  test('should trigger col cell hover', () => {
     s2.emit(S2Event.COL_CELL_HOVER, { target: {} } as GEvent);
     expect(s2.interaction.getState()).toEqual({
       cells: [mockCellMeta],
@@ -117,9 +118,7 @@ describe('Interaction Hover Tests', () => {
 
     await sleep(200);
 
-    expect(s2.interaction.getCurrentStateName()).not.toEqual(
-      InteractionStateName.HOVER_FOCUS,
-    );
+    expect(s2.interaction.isHoverFocusState()).toBeFalsy();
   });
 
   test('should clear data cell hover focus timer when row cell hover', async () => {
@@ -166,5 +165,39 @@ describe('Interaction Hover Tests', () => {
       colCellEvent,
       ...mockTooltipParams,
     );
+  });
+
+  test('should update hover focus state when data cell hover focus', async () => {
+    const dataCellEvent = {
+      target: {
+        id: 'data-cell',
+      },
+    };
+    s2.emit(S2Event.DATA_CELL_HOVER, dataCellEvent as unknown as GEvent);
+
+    await sleep(HOVER_FOCUS_TIME + 200);
+
+    expect(s2.interaction.isHoverFocusState()).toBeTruthy();
+  });
+
+  test("should dont't update state when data cell hover focus but disable hoverFocus options", async () => {
+    s2.options = {
+      interaction: {
+        hoverHighlight: true,
+        hoverFocus: false,
+      },
+    } as S2Options;
+
+    const dataCellEvent = {
+      target: {
+        id: 'data-cell',
+      },
+    };
+    s2.emit(S2Event.DATA_CELL_HOVER, dataCellEvent as unknown as GEvent);
+
+    await sleep(HOVER_FOCUS_TIME + 200);
+
+    expect(s2.interaction.isHoverFocusState()).toBeFalsy();
+    expect(s2.interaction.getHoverTimer()).toBeFalsy();
   });
 });

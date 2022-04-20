@@ -1,4 +1,6 @@
-import { concat, filter, find, forEach, isEmpty, map } from 'lodash';
+import { concat, filter, find, forEach, isEmpty, isNil, map } from 'lodash';
+import { getCellMeta } from 'src/utils/interaction/select-event';
+import type { IElement } from '@antv/g-canvas';
 import {
   DataCellClick,
   MergedCellClick,
@@ -7,10 +9,11 @@ import {
 } from './base-interaction/click';
 import { HoverEvent } from './base-interaction/hover';
 import { EventController } from './event-controller';
-import { ShiftMultiSelection } from './shift-multi-selection';
+import { RangeSelection } from './range-selection';
 import { SelectedCellMove } from './selected-cell-move';
 import { BrushSelection, DataCellMultiSelection, RowColumnResize } from './';
 import { hideColumnsByThunkGroup } from '@/utils/hide-columns';
+import { Node } from '@/facet/layout/node';
 import { ColCell, DataCell, MergedCell, RowCell } from '@/cell';
 import {
   CellTypes,
@@ -18,6 +21,7 @@ import {
   InteractionStateName,
   INTERACTION_STATE_INFO_KEY,
   InterceptType,
+  S2Event,
 } from '@/common/constant';
 import {
   CustomInteraction,
@@ -25,6 +29,7 @@ import {
   Intercept,
   MergedCellInfo,
   S2CellType,
+  SelectHeaderCellInfo,
 } from '@/common/interface';
 import { ColHeader, RowHeader } from '@/facet/header';
 import { BaseEvent } from '@/interaction/base-event';
@@ -110,16 +115,28 @@ export class RootInteraction {
     return this.getCurrentStateName() === stateName;
   }
 
-  public isSelectedState() {
+  private isStateOf(stateName: InteractionStateName) {
     const currentState = this.getState();
-    return currentState?.stateName === InteractionStateName.SELECTED;
+    return currentState?.stateName === stateName;
   }
 
-  private isActiveCell(cell: S2CellType) {
-    return this.getCells().find((meta) => cell.getMeta().id === meta.id);
+  public isSelectedState() {
+    return this.isStateOf(InteractionStateName.SELECTED);
   }
 
-  public isSelectedCell(cell: S2CellType) {
+  public isHoverFocusState() {
+    return this.isStateOf(InteractionStateName.HOVER_FOCUS);
+  }
+
+  public isHoverState() {
+    return this.isStateOf(InteractionStateName.HOVER);
+  }
+
+  public isActiveCell(cell: S2CellType): boolean {
+    return !!this.getCells().find((meta) => cell.getMeta().id === meta.id);
+  }
+
+  public isSelectedCell(cell: S2CellType): boolean {
     return this.isSelectedState() && this.isActiveCell(cell);
   }
 
@@ -140,15 +157,13 @@ export class RootInteraction {
   }
 
   public clearStyleIndependent() {
-    const currentState = this.getState();
-    if (
-      currentState?.stateName === InteractionStateName.SELECTED ||
-      currentState?.stateName === InteractionStateName.HOVER
-    ) {
-      this.getPanelGroupAllDataCells().forEach((cell) => {
-        cell.hideInteractionShape();
-      });
+    if (!this.isSelectedState() && !this.isHoverState()) {
+      return;
     }
+
+    this.getPanelGroupAllDataCells().forEach((cell) => {
+      cell.hideInteractionShape();
+    });
   }
 
   public getPanelGroupAllUnSelectedDataCells() {
@@ -159,13 +174,13 @@ export class RootInteraction {
 
   public getPanelGroupAllDataCells(): DataCell[] {
     return getAllChildCells(
-      this.spreadsheet?.panelGroup?.get('children'),
+      this.spreadsheet.panelGroup?.getChildren() as IElement[],
       DataCell,
     );
   }
 
   public getAllRowHeaderCells() {
-    const children = this.spreadsheet?.foregroundGroup?.getChildren();
+    const children = this.spreadsheet.foregroundGroup?.getChildren();
     const rowHeader = filter(
       children,
       (group) => group instanceof RowHeader,
@@ -225,6 +240,86 @@ export class RootInteraction {
     });
   };
 
+  public getCellLeafNodes = (cell: Node): Node[] => {
+    const isHierarchyTree = this.spreadsheet.isHierarchyTreeType();
+
+    // 树状结构的行头点击不需要遍历当前行头的所有子节点，因为只会有一级
+    return isHierarchyTree
+      ? Node.getAllLeaveNodes(cell).filter(
+          (node) => node.rowIndex === cell.rowIndex,
+        )
+      : Node.getAllChildrenNodes(cell);
+  };
+
+  public selectHeaderCell = (
+    selectHeaderCellInfo: SelectHeaderCellInfo = {} as SelectHeaderCellInfo,
+  ) => {
+    const { cell } = selectHeaderCellInfo;
+    if (isEmpty(cell)) {
+      return;
+    }
+
+    const currentCellMeta = cell?.getMeta() as Node;
+    if (isNil(currentCellMeta.x)) {
+      return;
+    }
+
+    this.addIntercepts([InterceptType.HOVER]);
+
+    const isHierarchyTree = this.spreadsheet.isHierarchyTreeType();
+    const lastState = this.getState();
+    const isSelectedCell = this.isSelectedCell(cell);
+    const isMultiSelected =
+      selectHeaderCellInfo?.isMultiSelection && this.isSelectedState();
+
+    // 如果是已选中的单元格, 则取消选中, 兼容行列多选 (含叶子节点)
+    let leafNodes = isSelectedCell
+      ? []
+      : this.getCellLeafNodes(currentCellMeta);
+    let selectedCells = isSelectedCell ? [] : [getCellMeta(cell)];
+
+    if (isMultiSelected) {
+      selectedCells = concat(lastState?.cells, selectedCells);
+      leafNodes = concat(lastState?.nodes, leafNodes);
+
+      if (isSelectedCell) {
+        selectedCells = selectedCells.filter(
+          ({ id }) => id !== currentCellMeta.id,
+        );
+        leafNodes = leafNodes.filter((node) => node.id !== currentCellMeta.id);
+      }
+    }
+
+    if (isEmpty(selectedCells)) {
+      this.reset();
+      this.spreadsheet.emit(S2Event.GLOBAL_SELECTED, this.getActiveCells());
+      return;
+    }
+
+    // 兼容行列多选 (高亮 行/列头 以及相对应的数值单元格)
+    this.changeState({
+      cells: selectedCells,
+      nodes: leafNodes,
+      stateName: InteractionStateName.SELECTED,
+    });
+
+    const selectedCellIds = selectedCells.map(({ id }) => id);
+    this.updateCells(this.getRowColActiveCells(selectedCellIds));
+
+    // 平铺模式下选中子节点
+    if (!isHierarchyTree) {
+      leafNodes.forEach((node) => {
+        node?.belongsCell?.updateByState(
+          InteractionStateName.SELECTED,
+          node.belongsCell,
+        );
+      });
+    }
+    this.spreadsheet.emit(S2Event.GLOBAL_SELECTED, this.getActiveCells());
+
+    return true;
+  };
+
   public mergeCells = (cellsInfo?: MergedCellInfo[], hideData?: boolean) => {
     mergeCell(this.spreadsheet, cellsInfo, hideData);
   };
@@ -234,62 +329,80 @@ export class RootInteraction {
   };
 
   public hideColumns(hiddenColumnFields: string[] = []) {
-    hideColumnsByThunkGroup(this.spreadsheet, hiddenColumnFields);
+    hideColumnsByThunkGroup(this.spreadsheet, hiddenColumnFields, true);
   }
 
-  /**
-   * 注册交互（组件按自己的场景写交互，继承此方法注册）
-   * @param options
-   */
+  private getDefaultInteractions() {
+    const {
+      resize,
+      brushSelection,
+      multiSelection,
+      rangeSelection,
+      selectedCellMove,
+    } = this.spreadsheet.options.interaction;
+
+    return [
+      {
+        key: InteractionName.DATA_CELL_CLICK,
+        interaction: DataCellClick,
+      },
+      {
+        key: InteractionName.ROW_COLUMN_CLICK,
+        interaction: RowColumnClick,
+      },
+      {
+        key: InteractionName.ROW_TEXT_CLICK,
+        interaction: RowTextClick,
+      },
+      {
+        key: InteractionName.MERGED_CELLS_CLICK,
+        interaction: MergedCellClick,
+      },
+      {
+        key: InteractionName.HOVER,
+        interaction: HoverEvent,
+        enable: !isMobile(),
+      },
+      {
+        key: InteractionName.BRUSH_SELECTION,
+        interaction: BrushSelection,
+        enable: !isMobile() && brushSelection,
+      },
+      {
+        key: InteractionName.COL_ROW_RESIZE,
+        interaction: RowColumnResize,
+        enable: !isMobile() && resize,
+      },
+      {
+        key: InteractionName.DATA_CELL_MULTI_SELECTION,
+        interaction: DataCellMultiSelection,
+        enable: !isMobile() && multiSelection,
+      },
+      {
+        key: InteractionName.RANGE_SELECTION,
+        interaction: RangeSelection,
+        enable: !isMobile() && rangeSelection,
+      },
+      {
+        key: InteractionName.SELECTED_CELL_MOVE,
+        interaction: SelectedCellMove,
+        enable: !isMobile() && selectedCellMove,
+      },
+    ];
+  }
+
   private registerInteractions() {
+    const { customInteractions } = this.spreadsheet.options.interaction;
+
     this.interactions.clear();
 
-    this.interactions.set(
-      InteractionName.DATA_CELL_CLICK,
-      new DataCellClick(this.spreadsheet),
-    );
-    this.interactions.set(
-      InteractionName.ROW_COLUMN_CLICK,
-      new RowColumnClick(this.spreadsheet),
-    );
-    this.interactions.set(
-      InteractionName.ROW_TEXT_CLICK,
-      new RowTextClick(this.spreadsheet),
-    );
-    this.interactions.set(
-      InteractionName.MERGED_CELLS_CLICK,
-      new MergedCellClick(this.spreadsheet),
-    );
-    this.interactions.set(
-      InteractionName.HOVER,
-      new HoverEvent(this.spreadsheet),
-    );
+    const defaultInteractions = this.getDefaultInteractions();
+    defaultInteractions.forEach(({ key, interaction: Interaction, enable }) => {
+      if (enable !== false) {
+        this.interactions.set(key, new Interaction(this.spreadsheet));
+      }
+    });
 
-    if (!isMobile()) {
-      this.interactions.set(
-        InteractionName.BRUSH_SELECTION,
-        new BrushSelection(this.spreadsheet),
-      );
-      this.interactions.set(
-        InteractionName.COL_ROW_RESIZE,
-        new RowColumnResize(this.spreadsheet),
-      );
-      this.interactions.set(
-        InteractionName.DATA_CELL_MULTI_SELECTION,
-        new DataCellMultiSelection(this.spreadsheet),
-      );
-      this.interactions.set(
-        InteractionName.COL_ROW_SHIFT_MULTI_SELECTION,
-        new ShiftMultiSelection(this.spreadsheet),
-      );
-      this.interactions.set(
-        InteractionName.SELECTED_CELL_MOVE,
-        new SelectedCellMove(this.spreadsheet),
-      );
-    }
-
-    const customInteractions =
-      this.spreadsheet.options?.interaction.customInteractions;
     if (!isEmpty(customInteractions)) {
       forEach(customInteractions, (customInteraction: CustomInteraction) => {
         const CustomInteractionClass = customInteraction.interaction;

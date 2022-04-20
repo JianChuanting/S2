@@ -7,7 +7,7 @@ export enum InteractionName {
   BRUSH_SELECTION = 'brushSelection',
   COL_ROW_RESIZE = 'rowColResize',
   DATA_CELL_MULTI_SELECTION = 'dataCellMultiSelection',
-  COL_ROW_SHIFT_MULTI_SELECTION = 'colRowShiftMultiSelection',
+  RANGE_SELECTION = 'rangeSelection',
   SELECTED_CELL_MOVE = 'selectedCellMove',
 }
 
@@ -63,6 +63,7 @@ export enum InteractionKeyboardKey {
   COPY = 'c',
   ESC = 'Escape',
   META = 'Meta',
+  CONTROL = 'Control',
   ARROW_UP = 'ArrowUp',
   ARROW_DOWN = 'ArrowDown',
   ARROW_LEFT = 'ArrowLeft',
@@ -82,7 +83,23 @@ export enum InterceptType {
   RESIZE = 'resize',
 }
 
+export const BRUSH_AUTO_SCROLL_INITIAL_CONFIG = {
+  x: {
+    value: 0,
+    scroll: false,
+  },
+  y: {
+    value: 0,
+    scroll: false,
+  },
+};
+
 export enum ScrollbarPositionType {
   CONTENT = 'content',
   CANVAS = 'canvas',
+}
+
+export enum ScrollDirection {
+  LEADING = 'leading',
+  TRAILING = 'trailing',
 }

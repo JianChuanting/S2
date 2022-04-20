@@ -7,6 +7,7 @@ import { S2Event } from '@/common/constant';
 import {
   HOVER_FOCUS_TIME,
   InteractionStateName,
+  InterceptType,
 } from '@/common/constant/interaction';
 import { S2CellType, ViewMeta, TooltipOptions } from '@/common/interface';
 import { getActiveHoverRowColCells } from '@/utils/interaction/hover-event';
@@ -64,6 +65,9 @@ export class HoverEvent extends BaseEvent implements BaseEventImplement {
     interaction.clearHoverTimer();
 
     const hoverTimer = setTimeout(() => {
+      if (interaction.hasIntercepts([InterceptType.HOVER])) {
+        return;
+      }
       interaction.changeState({
         cells: [getCellMeta(cell)],
         stateName: InteractionStateName.HOVER_FOCUS,
@@ -113,6 +117,7 @@ export class HoverEvent extends BaseEvent implements BaseEventImplement {
         enterable: true,
         hideSummary: true,
         showSingleTips,
+        enableFormat: this.spreadsheet.isPivotMode(),
       };
       const data = this.getCellInfo(meta, showSingleTips);
       this.spreadsheet.showTooltipWithInfo(event, data, options);
@@ -154,16 +159,19 @@ export class HoverEvent extends BaseEvent implements BaseEventImplement {
       if (isEmpty(cell)) {
         return;
       }
-      const { interaction } = this.spreadsheet;
+      const { interaction, options } = this.spreadsheet;
+      const { interaction: interactionOptions } = options;
       const meta = cell?.getMeta() as ViewMeta;
       interaction.changeState({
         cells: [getCellMeta(cell)],
         stateName: InteractionStateName.HOVER,
       });
 
-      if (this.spreadsheet.options.interaction.hoverHighlight) {
+      if (interactionOptions.hoverHighlight) {
         // highlight all the row and column cells which the cell belongs to
         this.updateRowColCells(meta);
+      }
+      if (interactionOptions.hoverFocus) {
         this.changeStateToHoverFocus(cell, event, meta);
       }
     });
